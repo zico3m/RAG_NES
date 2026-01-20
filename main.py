@@ -2,21 +2,22 @@ import os
 from fastapi import FastAPI
 from pydantic import BaseModel
 from supabase import create_client
-from sentence_transformers import SentenceTransformer
 from groq import Groq
 
+# Environment variables
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_ANON_KEY"]
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 
+# Clients
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-embed_model = SentenceTransformer("intfloat/multilingual-e5-small")
 llm = Groq(api_key=GROQ_API_KEY)
 
 app = FastAPI()
 
 class AskRequest(BaseModel):
     question: str
+
 
 def build_prompt(context, question):
     return f"""
@@ -39,27 +40,37 @@ def build_prompt(context, question):
 الإجابة:
 """
 
+
+def embed_query(text: str):
+    """
+    Embedding خفيف باستخدام Groq
+    """
+    emb = llm.embeddings.create(
+        model="text-embedding-3-small",
+        input=text
+    )
+    return emb.data[0].embedding
+
+
 @app.post("/ask")
 def ask_news(req: AskRequest):
     question = req.question
 
-    query_embedding = embed_model.encode(
-        ["query: " + question],
-        normalize_embeddings=True
-    )[0]
+    # embedding للسؤال فقط (خفيف)
+    query_embedding = embed_query("query: " + question)
 
-    # مهم: هذه RPC لازم تكون موجودة في Supabase
+    # البحث في Supabase (pgvector)
     results = supabase.rpc(
         "match_news_chunks",
         {
-            "query_embedding": query_embedding.tolist(),
+            "query_embedding": query_embedding,
             "match_count": 5
         }
     ).execute()
 
     context = ""
     for row in (results.data or []):
-        context += (row["chunk_text"][:800] + "\n\n---\n\n")
+        context += row["chunk_text"][:800] + "\n\n---\n\n"
 
     prompt = build_prompt(context, question)
 
@@ -69,4 +80,6 @@ def ask_news(req: AskRequest):
         temperature=0.2
     )
 
-    return {"answer": response.choices[0].message.content}
+    return {
+        "answer": response.choices[0].message.content
+    }
