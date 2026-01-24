@@ -2,4 +2,4 @@ fastapi
 uvicorn
 supabase
 sentence-transformers
-groq
+
